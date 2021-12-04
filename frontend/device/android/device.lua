@@ -291,14 +291,6 @@ function Device:init()
     -- Accelerometer
     if G_reader_settings:isTrue("input_ignore_gsensor") then
         logger.dbg("input_ignore_gsensor is toggled on")
-	    -- TODO: use framebuffer.getOrientationMode?
-		-- get the curren torientation and set it.
-		-- setRotationMode will toggle GSensor off
-        -- local curr_orientation = android.orientation.get()
-	-- logger.dbg("current orientation is: ", curr_orientation)
-	-- self.screen:setRotationMode(curr_orientation)
---	android.orientation.set(C["ASCREEN_ORIENTATION_LOCKED"])
---	self.isGSensorEnabled = no
 	self:toggleGSensor(false)
     else
         logger.dbg("input_ignore_gsensor is toggled off")
@@ -307,9 +299,6 @@ function Device:init()
 	-- start reader.lua with the sensor orientation, not the last closed one
 	local curr_orientation = android.orientation.get()
         G_reader_settings:saveSetting("closed_rotation_mode", curr_orientation)
-
-	-- android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
-	-- self.isGSensorEnabled = yes
     end
 
   if G_reader_settings:isTrue("input_lock_gsensor") then
@@ -317,7 +306,6 @@ function Device:init()
   else
       self:lockGSensor(false)
   end
-
 
     Generic.init(self)
 end
@@ -466,13 +454,6 @@ function Device:showLightDialog()
     local UIManager = require("ui/uimanager")
     UIManager:nextTick(function() self:_showLightDialog() end)
 end
--- 
--- function Device:_showLightDialog()
--- logger.dbg("TESTTEST")
---     local FrontLightWidget = require("ui/widget/frontlightwidget")
---     local UIManager = require("ui/uimanager")
---     UIManager:show(FrontLightWidget:new{})
--- end
 
 function Device:_showLightDialog()
     local title = android.isEink() and _("Frontlight settings") or _("Light settings")
@@ -516,14 +497,14 @@ function Device:_lockGSensor(toggle)
         if toggle == true then
 	    G_reader_settings:makeTrue("input_lock_gsensor")
 	    if curr_orientation == self.screen.ORIENTATION_PORTRAIT or curr_orientation == self.screen.ORIENTATION_PORTRAIT_ROTATED then
-		android.orientation.set(C["ASCREEN_ORIENTATION_SENSOR_PORTRAIT"])
+		android.orientation.set(C["ASCREEN_ORIENTATION_USER_PORTRAIT"])
             else
-	        android.orientation.set(C["ASCREEN_ORIENTATION_SENSOR_LANDSCAPE"])
+	        android.orientation.set(C["ASCREEN_ORIENTATION_USER_LANDSCAPE"])
     	    end
 	    self.isGSensorLocked = yes
 	else
 	    G_reader_settings:makeFalse("input_lock_gsensor")
-	    android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
+	    android.orientation.set(C["ASCREEN_ORIENTATION_USER"])
 	    self.isGSensorLocked = no
 	end
 end
@@ -545,18 +526,21 @@ end
 function Device:_toggleGSensor(toggle)
     logger.dbg("called toggleGSensor()")	
     if toggle == true then
-	-- Honor Gyro Events
-	--if self:isGSensorLocked() then
-	--    self:_lockGSensor(true)
-	--else
-	android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
+	-- if the lock orientation option is checked, then honor that.
+	if self:isGSensorLocked() then
+	    self:_lockGSensor(true)
+	else
+	    -- USER will always respect the system autorotate toggle/orientation settings
+	    -- without this, if autorotate is toggled off but we allow sensor rotation, then the
+	    -- homescreen is not guaranteed to have correct orientation on exit.
+	    -- With USER, the rotation will only work if systemwide autorotate is toggled,
+	    -- so to orientation when we exit to the homescreen will be more consistent.
+	    android.orientation.set(C["ASCREEN_ORIENTATION_USER"])
+	end
         logger.dbg("Activated the GSensor")
-	--end
 	self.isGSensorEnabled = yes
 	G_reader_settings:makeFalse("input_ignore_gsensor")
     else
-	-- local current_orientation = android.orientation.get()
-	-- self.screen:setRotationMode(current_orientation)
         logger.dbg("deactivated the GSensor")
 	android.orientation.set(C["ASCREEN_ORIENTATION_LOCKED"])
 	self.isGSensorEnabled = no
