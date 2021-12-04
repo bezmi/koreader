@@ -68,11 +68,16 @@ local external = require("device/thirdparty"):new{
 }
 
 local Device = Generic:new{
+    
     isAndroid = yes,
     model = android.prop.product,
     hasKeys = yes,
     hasDPad = no,
     hasExitOptions = no,
+    -- TODO: add device specific check here
+    hasGSensor = yes,
+    isGSensorEnabled = yes,
+    canToggleGSensor = yes,
     hasEinkScreen = function() return android.isEink() end,
     hasColorScreen = function() return not android.isEink() end,
     hasFrontlight = android.hasLights,
@@ -108,6 +113,7 @@ local Device = Generic:new{
             android.dictLookup(text, app, action)
         end
     end,
+
 
     -- Android is very finicky, and the LuaJIT allocator has a tremendously hard time getting the system
     -- to allocate memory for it in the very specific memory range it requires to store generated code (mcode).
@@ -147,24 +153,24 @@ function Device:init()
                 or ev.code == C.APP_CMD_TERM_WINDOW then
                 this.device.input:resetState()
             elseif ev.code == C.APP_CMD_CONFIG_CHANGED then
-                -- orientation and size changes
-                if android.screen.width ~= android.getScreenWidth()
-                or android.screen.height ~= android.getScreenHeight() then
-                    this.device.screen:resize()
-                    local new_size = this.device.screen:getSize()
-                    logger.info("Resizing screen to", new_size)
-                    local FileManager = require("apps/filemanager/filemanager")
-                    UIManager:broadcastEvent(Event:new("SetDimensions", new_size))
-                    UIManager:broadcastEvent(Event:new("ScreenResize", new_size))
-                    UIManager:broadcastEvent(Event:new("RedrawCurrentPage"))
-                    if FileManager.instance then
-                        FileManager.instance:reinit(FileManager.instance.path,
-                            FileManager.instance.focused_file)
-                        UIManager:setDirty(FileManager.instance.banner, function()
-                            return "ui", FileManager.instance.banner.dimen
-                        end)
-                    end
-                end
+               -- orientation and size changes
+	       if android.screen.width ~= android.getScreenWidth()
+	       or android.screen.height ~= android.getScreenHeight() then
+		   this.device.screen:resize()
+		   local new_size = this.device.screen:getSize()
+		   logger.info("Resizing screen to", new_size)
+		   local FileManager = require("apps/filemanager/filemanager")
+		   UIManager:broadcastEvent(Event:new("SetDimensions", new_size))
+		   UIManager:broadcastEvent(Event:new("ScreenResize", new_size))
+		   UIManager:broadcastEvent(Event:new("RedrawCurrentPage"))
+		   if FileManager.instance then
+		       FileManager.instance:reinit(FileManager.instance.path,
+			   FileManager.instance.focused_file)
+		       UIManager:setDirty(FileManager.instance.banner, function()
+			   return "ui", FileManager.instance.banner.dimen
+		       end)
+		   end
+		end
                 -- to-do: keyboard connected, disconnected
             elseif ev.code == C.APP_CMD_RESUME then
                 if not android.prop.brokenLifecycle then
@@ -234,7 +240,6 @@ function Device:init()
             return android.setClipboardText(text)
         end,
     }
-
     -- check if we have a keyboard
     if android.lib.AConfiguration_getKeyboard(android.app.config)
        == C.ACONFIGURATION_KEYBOARD_QWERTY
@@ -282,6 +287,37 @@ function Device:init()
     if G_reader_settings:isTrue("android_ignore_back_button") then
         android.setBackButtonIgnored(true)
     end
+    
+    -- Accelerometer
+    if G_reader_settings:isTrue("input_ignore_gsensor") then
+        logger.dbg("input_ignore_gsensor is toggled on")
+	    -- TODO: use framebuffer.getOrientationMode?
+		-- get the curren torientation and set it.
+		-- setRotationMode will toggle GSensor off
+        -- local curr_orientation = android.orientation.get()
+	-- logger.dbg("current orientation is: ", curr_orientation)
+	-- self.screen:setRotationMode(curr_orientation)
+--	android.orientation.set(C["ASCREEN_ORIENTATION_LOCKED"])
+--	self.isGSensorEnabled = no
+	self:toggleGSensor(false)
+    else
+        logger.dbg("input_ignore_gsensor is toggled off")
+	self:toggleGSensor(true)
+
+	-- start reader.lua with the sensor orientation, not the last closed one
+	local curr_orientation = android.orientation.get()
+        G_reader_settings:saveSetting("closed_rotation_mode", curr_orientation)
+
+	-- android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
+	-- self.isGSensorEnabled = yes
+    end
+
+  if G_reader_settings:isTrue("input_lock_gsensor") then
+      self:lockGSensor(true)
+  else
+      self:lockGSensor(false)
+  end
+
 
     Generic.init(self)
 end
@@ -430,6 +466,13 @@ function Device:showLightDialog()
     local UIManager = require("ui/uimanager")
     UIManager:nextTick(function() self:_showLightDialog() end)
 end
+-- 
+-- function Device:_showLightDialog()
+-- logger.dbg("TESTTEST")
+--     local FrontLightWidget = require("ui/widget/frontlightwidget")
+--     local UIManager = require("ui/uimanager")
+--     UIManager:show(FrontLightWidget:new{})
+-- end
 
 function Device:_showLightDialog()
     local title = android.isEink() and _("Frontlight settings") or _("Light settings")
@@ -453,6 +496,71 @@ function Device:_showLightDialog()
             logger.dbg("Dialog Cancel, warmth: " .. self.powerd.fl_warmth)
             self.powerd:setWarmth(self.powerd.fl_warmth)
         end
+    end
+end
+
+function Device:lockGSensor(toggle)
+    if toggle == true or toggle == false then
+        self:_lockGSensor(toggle)
+    else
+	if self:isGSensorLocked() == true then
+	    self:_lockGSensor(false)
+	else
+	    self:_lockGSensor(true)
+	end
+    end
+end
+
+function Device:_lockGSensor(toggle)
+	local curr_orientation = android.orientation.get()
+        if toggle == true then
+	    G_reader_settings:makeTrue("input_lock_gsensor")
+	    if curr_orientation == self.screen.ORIENTATION_PORTRAIT or curr_orientation == self.screen.ORIENTATION_PORTRAIT_ROTATED then
+		android.orientation.set(C["ASCREEN_ORIENTATION_SENSOR_PORTRAIT"])
+            else
+	        android.orientation.set(C["ASCREEN_ORIENTATION_SENSOR_LANDSCAPE"])
+    	    end
+	    self.isGSensorLocked = yes
+	else
+	    G_reader_settings:makeFalse("input_lock_gsensor")
+	    android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
+	    self.isGSensorLocked = no
+	end
+end
+
+
+
+function Device:toggleGSensor(toggle)
+    if toggle == true or toggle == false then
+        self:_toggleGSensor(toggle)
+    else
+        if isGSensorEnabled() == true then
+	    self:_toggleGSensor(false)
+	else
+	    self:_toggleGSensor(true)
+	end
+    end
+end
+
+function Device:_toggleGSensor(toggle)
+    logger.dbg("called toggleGSensor()")	
+    if toggle == true then
+	-- Honor Gyro Events
+	--if self:isGSensorLocked() then
+	--    self:_lockGSensor(true)
+	--else
+	android.orientation.set(C["ASCREEN_ORIENTATION_FULL_SENSOR"])
+        logger.dbg("Activated the GSensor")
+	--end
+	self.isGSensorEnabled = yes
+	G_reader_settings:makeFalse("input_ignore_gsensor")
+    else
+	-- local current_orientation = android.orientation.get()
+	-- self.screen:setRotationMode(current_orientation)
+        logger.dbg("deactivated the GSensor")
+	android.orientation.set(C["ASCREEN_ORIENTATION_LOCKED"])
+	self.isGSensorEnabled = no
+	G_reader_settings:makeTrue("input_ignore_gsensor")
     end
 end
 
